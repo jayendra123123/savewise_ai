@@ -1,0 +1,11 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const budgetController_1 = require("../controllers/budgetController");
+const authMiddleware_1 = require("../middleware/authMiddleware");
+const router = (0, express_1.Router)();
+router.use(authMiddleware_1.requireAuth);
+router.get('/', budgetController_1.BudgetController.getBudgets);
+router.post('/', budgetController_1.BudgetController.setBudget);
+router.delete('/:id', budgetController_1.BudgetController.deleteBudget);
+exports.default = router;
