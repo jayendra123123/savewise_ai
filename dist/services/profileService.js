@@ -49,6 +49,9 @@ class ProfileService {
             onboardingCompleted: true
         }, { new: true, upsert: true });
         const user = await User_1.User.findById(userId);
+        if (!user) {
+            throw new Error('User not found. Please log in again.');
+        }
         return {
             user: {
                 id: user._id.toString(),

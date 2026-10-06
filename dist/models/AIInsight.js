@@ -51,25 +51,45 @@ const AIInsightSchema = new mongoose_1.Schema({
         type: String,
         required: true
     },
-    insights: {
-        type: [String],
-        default: []
+    financialSummary: {
+        type: mongoose_1.Schema.Types.Mixed,
+        default: null
+    },
+    spendingAnalysis: {
+        type: mongoose_1.Schema.Types.Mixed,
+        default: null
     },
     warnings: {
-        type: [String],
+        type: mongoose_1.Schema.Types.Mixed,
+        default: []
+    },
+    saveMoreOpportunities: {
+        type: mongoose_1.Schema.Types.Mixed,
+        default: []
+    },
+    goalProgress: {
+        type: mongoose_1.Schema.Types.Mixed,
+        default: []
+    },
+    actionPlan: {
+        type: mongoose_1.Schema.Types.Mixed,
+        default: []
+    },
+    insights: {
+        type: mongoose_1.Schema.Types.Mixed,
         default: []
     },
     recommendations: {
-        type: [String],
+        type: mongoose_1.Schema.Types.Mixed,
         default: []
     },
     goalAdvice: {
-        type: [String],
+        type: mongoose_1.Schema.Types.Mixed,
         default: []
     },
     disclaimer: {
         type: String,
-        default: 'AI insights are for educational and informational purposes only and are not professional financial advice.'
+        default: 'SaveWise AI Financial Coach insights are for educational and informational purposes only and do not constitute certified financial advice.'
     },
     rawMetricsSnapshot: {
         type: mongoose_1.Schema.Types.Mixed,

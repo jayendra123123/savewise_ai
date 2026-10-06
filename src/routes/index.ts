@@ -9,6 +9,8 @@ import dashboardRoutes from './dashboardRoutes';
 import reportRoutes from './reportRoutes';
 import aiRoutes from './aiRoutes';
 import analysisRoutes from './analysisRoutes';
+import marketRoutes from './marketRoutes';
+import todoRoutes from './todoRoutes';
 
 const router = Router();
 
@@ -22,6 +24,8 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/reports', reportRoutes);
 router.use('/ai', aiRoutes);
 router.use('/analysis', analysisRoutes);
+router.use('/market', marketRoutes);
+router.use('/todos', todoRoutes);
 
 // Health check endpoint
 router.get('/health', (_req, res) => {

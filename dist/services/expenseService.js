@@ -8,7 +8,35 @@ const mongoose_1 = __importDefault(require("mongoose"));
 const Expense_1 = require("../models/Expense");
 class ExpenseService {
     static async createExpense(userId, data) {
-        const expenseDate = data.date ? new Date(data.date) : new Date();
+        let expenseDate;
+        if (data.date && data.date.trim()) {
+            const cleanDate = data.date.trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+                const [y, m, d] = cleanDate.split('-').map(Number);
+                expenseDate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+            }
+            else if (/^\d{4}-\d{2}$/.test(cleanDate)) {
+                const [y, m] = cleanDate.split('-').map(Number);
+                expenseDate = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
+            }
+            else {
+                const parsed = new Date(cleanDate);
+                expenseDate = isNaN(parsed.getTime()) ? new Date() : parsed;
+            }
+        }
+        else if (data.selectedMonth && data.selectedMonth.trim()) {
+            const cleanMonth = data.selectedMonth.trim();
+            if (/^\d{4}-(0[1-9]|1[0-2])$/.test(cleanMonth)) {
+                const [y, m] = cleanMonth.split('-').map(Number);
+                expenseDate = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
+            }
+            else {
+                expenseDate = new Date();
+            }
+        }
+        else {
+            expenseDate = new Date();
+        }
         const expense = await Expense_1.Expense.create({
             userId: new mongoose_1.default.Types.ObjectId(userId),
             amount: data.amount,
@@ -21,8 +49,30 @@ class ExpenseService {
     }
     static async updateExpense(userId, expenseId, data) {
         const updateData = { ...data };
-        if (data.date) {
-            updateData.date = new Date(data.date);
+        delete updateData.selectedMonth;
+        if (data.date && data.date.trim()) {
+            const cleanDate = data.date.trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
+                const [y, m, d] = cleanDate.split('-').map(Number);
+                updateData.date = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+            }
+            else if (/^\d{4}-\d{2}$/.test(cleanDate)) {
+                const [y, m] = cleanDate.split('-').map(Number);
+                updateData.date = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
+            }
+            else {
+                const parsed = new Date(cleanDate);
+                if (!isNaN(parsed.getTime())) {
+                    updateData.date = parsed;
+                }
+            }
+        }
+        else if (data.selectedMonth && data.selectedMonth.trim()) {
+            const cleanMonth = data.selectedMonth.trim();
+            if (/^\d{4}-(0[1-9]|1[0-2])$/.test(cleanMonth)) {
+                const [y, m] = cleanMonth.split('-').map(Number);
+                updateData.date = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
+            }
         }
         const expense = await Expense_1.Expense.findOneAndUpdate({ _id: expenseId, userId: new mongoose_1.default.Types.ObjectId(userId) }, updateData, { new: true });
         if (!expense) {
@@ -49,14 +99,16 @@ class ExpenseService {
         if (params.category) {
             filter.category = params.category;
         }
-        if (params.month) {
-            // month is 'YYYY-MM'
-            const [yearStr, monthStr] = params.month.split('-');
-            const year = parseInt(yearStr, 10);
-            const monthIndex = parseInt(monthStr, 10) - 1;
-            const startOfMonth = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
-            const endOfMonth = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
-            filter.date = { $gte: startOfMonth, $lte: endOfMonth };
+        if (params.month && params.month.toLowerCase() !== 'all') {
+            const cleanMonth = params.month.trim();
+            if (/^\d{4}-(0[1-9]|1[0-2])$/.test(cleanMonth)) {
+                const [yearStr, monthStr] = cleanMonth.split('-');
+                const year = parseInt(yearStr, 10);
+                const monthIndex = parseInt(monthStr, 10) - 1;
+                const startOfMonth = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
+                const endOfMonth = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
+                filter.date = { $gte: startOfMonth, $lte: endOfMonth };
+            }
         }
         else if (params.startDate || params.endDate) {
             filter.date = {};

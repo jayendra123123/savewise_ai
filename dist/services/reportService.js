@@ -11,34 +11,41 @@ const budgetService_1 = require("./budgetService");
 const goalService_1 = require("./goalService");
 const financialEngine_1 = require("../calculations/financialEngine");
 class ReportService {
-    static async getReport(userId, period = 'current_month') {
+    static async getReport(userId, period = 'current_month', targetMonthYear) {
         const userObjectId = new mongoose_1.default.Types.ObjectId(userId);
         const profile = await FinancialProfile_1.FinancialProfile.findOne({ userId: userObjectId });
         const monthlyIncome = profile?.monthlyIncome || 0;
         const now = new Date();
+        let baseYear = now.getFullYear();
+        let baseMonth = now.getMonth(); // 0-indexed
+        if (targetMonthYear && /^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonthYear.trim())) {
+            const [y, m] = targetMonthYear.trim().split('-').map(Number);
+            baseYear = y;
+            baseMonth = m - 1;
+        }
         let startDate;
         let endDate;
         let monthsToInclude = 1;
         if (period === 'current_month') {
-            startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
-            endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59));
+            startDate = new Date(Date.UTC(baseYear, baseMonth, 1, 0, 0, 0));
+            endDate = new Date(Date.UTC(baseYear, baseMonth + 1, 0, 23, 59, 59, 999));
             monthsToInclude = 1;
         }
         else if (period === 'prev_month') {
-            startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1));
-            endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 0, 23, 59, 59));
+            startDate = new Date(Date.UTC(baseYear, baseMonth - 1, 1, 0, 0, 0));
+            endDate = new Date(Date.UTC(baseYear, baseMonth, 0, 23, 59, 59, 999));
             monthsToInclude = 1;
         }
         else if (period === 'last_6_months') {
-            startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 5, 1));
-            endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59));
+            startDate = new Date(Date.UTC(baseYear, baseMonth - 5, 1, 0, 0, 0));
+            endDate = new Date(Date.UTC(baseYear, baseMonth + 1, 0, 23, 59, 59, 999));
             monthsToInclude = 6;
         }
         else {
-            // current year
-            startDate = new Date(Date.UTC(now.getFullYear(), 0, 1));
-            endDate = new Date(Date.UTC(now.getFullYear(), 11, 31, 23, 59, 59));
-            monthsToInclude = now.getMonth() + 1;
+            // year
+            startDate = new Date(Date.UTC(baseYear, 0, 1, 0, 0, 0));
+            endDate = new Date(Date.UTC(baseYear, 11, 31, 23, 59, 59, 999));
+            monthsToInclude = baseMonth + 1;
         }
         // 1. Expenses in range
         const [categoryAgg, trendAgg, goals] = await Promise.all([
@@ -93,8 +100,8 @@ class ReportService {
                 savings
             };
         });
-        const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const budgetOverview = await budgetService_1.BudgetService.getBudgetsForMonth(userId, currentMonthKey);
+        const selectedMonthKey = `${baseYear}-${String(baseMonth + 1).padStart(2, '0')}`;
+        const budgetOverview = await budgetService_1.BudgetService.getBudgetsForMonth(userId, selectedMonthKey);
         const completedGoals = goals.filter((g) => g.metrics.isCompleted).length;
         const averageProgress = goals.length > 0
             ? Math.round((goals.reduce((acc, g) => acc + g.metrics.progressPercentage, 0) /

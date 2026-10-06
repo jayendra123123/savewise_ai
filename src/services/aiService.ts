@@ -15,6 +15,21 @@ import {
 import { GeminiFinancialCoach } from '../ai/geminiClient';
 import { FinancialContextSnapshot, AiCoachResponse } from '../ai/aiTypes';
 
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December'
+];
+
 export class AIService {
   static async analyzeFinances(
     userId: string,
@@ -37,14 +52,30 @@ export class AIService {
       monthlySavingsTarget
     );
 
-    // 2. Fetch expenses in this month
+    // 2. Date ranges for current month and previous month
     const [yearStr, monthStr] = monthYear.split('-');
     const year = parseInt(yearStr, 10);
     const monthIndex = parseInt(monthStr, 10) - 1;
+    const monthLabel = `${MONTH_NAMES[monthIndex]} ${year}`;
+
     const startOfMonth = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
     const endOfMonth = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
 
-    const [categoryAgg, budgetOverview, goals] = await Promise.all([
+    const prevYear = monthIndex === 0 ? year - 1 : year;
+    const prevMonthNum = monthIndex === 0 ? 12 : monthIndex;
+    const previousMonth = `${prevYear}-${String(prevMonthNum).padStart(2, '0')}`;
+    const previousMonthLabel = `${MONTH_NAMES[prevMonthNum - 1]} ${prevYear}`;
+    const startOfPrevMonth = new Date(Date.UTC(prevYear, prevMonthNum - 1, 1, 0, 0, 0));
+    const endOfPrevMonth = new Date(Date.UTC(prevYear, prevMonthNum, 0, 23, 59, 59, 999));
+
+    // 3. Parallel fetch of current & previous month data, budgets, and goals
+    const [
+      categoryAgg,
+      currentExpensesList,
+      prevCategoryAgg,
+      budgetOverview,
+      goals
+    ] = await Promise.all([
       Expense.aggregate([
         {
           $match: {
@@ -55,16 +86,41 @@ export class AIService {
         {
           $group: {
             _id: '$category',
-            total: { $sum: '$amount' }
+            total: { $sum: '$amount' },
+            count: { $sum: 1 }
           }
         },
         { $sort: { total: -1 } }
+      ]),
+      Expense.find({
+        userId: userObjectId,
+        date: { $gte: startOfMonth, $lte: endOfMonth }
+      })
+        .sort({ amount: -1 })
+        .limit(10)
+        .lean(),
+      Expense.aggregate([
+        {
+          $match: {
+            userId: userObjectId,
+            date: { $gte: startOfPrevMonth, $lte: endOfPrevMonth }
+          }
+        },
+        {
+          $group: {
+            _id: '$category',
+            total: { $sum: '$amount' }
+          }
+        }
       ]),
       BudgetService.getBudgetsForMonth(userId, monthYear),
       GoalService.getGoals(userId)
     ]);
 
+    // 4. Current month metrics
     const totalExpenses = categoryAgg.reduce((sum, item) => sum + item.total, 0);
+    const hasTransactions = totalExpenses > 0 || currentExpensesList.length > 0;
+    const transactionCount = currentExpensesList.length;
     const remainingBudget = calculateRemainingBudget(spendingBudget, totalExpenses);
     const actualSavings = calculateActualSavings(monthlyIncome, totalExpenses);
     const savingsRate = calculateSavingsRate(actualSavings, monthlyIncome);
@@ -72,23 +128,192 @@ export class AIService {
       monthlySavingsTarget,
       monthlyIncome
     );
+    const isOnTrackForTarget =
+      actualSavings >= monthlySavingsTarget && monthlySavingsTarget > 0;
+    const savingsDifference = actualSavings - monthlySavingsTarget;
+
+    // 5. Previous month metrics & comparison
+    const previousExpenses = prevCategoryAgg.reduce(
+      (sum, item) => sum + item.total,
+      0
+    );
+    const previousSavings = calculateActualSavings(monthlyIncome, previousExpenses);
+    const hasPreviousMonthData = previousExpenses > 0;
+    const expensesDiff = totalExpenses - previousExpenses;
+    const expensesPctChange =
+      previousExpenses > 0
+        ? Math.round(((totalExpenses - previousExpenses) / previousExpenses) * 100 * 10) /
+          10
+        : 0;
+    const trend: 'INCREASED' | 'DECREASED' | 'UNCHANGED' =
+      expensesDiff > 0
+        ? 'INCREASED'
+        : expensesDiff < 0
+        ? 'DECREASED'
+        : 'UNCHANGED';
+
+    // 6. Category Breakdown & MoM comparison map
+    const prevCatMap = new Map<string, number>();
+    prevCategoryAgg.forEach((item) => prevCatMap.set(item._id, item.total));
 
     const categories = categoryAgg.map((item) => {
       const budgetItem = budgetOverview.categories.find(
         (b) => b.category === item._id
       );
+      const prevAmt = prevCatMap.get(item._id) || 0;
+      const changeAmount = Math.round((item.total - prevAmt) * 100) / 100;
+      const changePercentage =
+        prevAmt > 0
+          ? Math.round(((item.total - prevAmt) / prevAmt) * 100 * 10) / 10
+          : 0;
+      const catTrend: 'INCREASED' | 'DECREASED' | 'UNCHANGED' =
+        changeAmount > 0
+          ? 'INCREASED'
+          : changeAmount < 0
+          ? 'DECREASED'
+          : 'UNCHANGED';
+
       return {
         name: item._id,
         amount: Math.round(item.total * 100) / 100,
         percentage: calculateCategoryPercentage(item.total, totalExpenses),
+        previousAmount: prevAmt,
+        changeAmount,
+        changePercentage,
+        trend: catTrend,
         budget: budgetItem?.budgetAmount,
         status: budgetItem?.status
       };
     });
 
+    const topCategory =
+      categories.length > 0
+        ? {
+            name: categories[0].name,
+            amount: categories[0].amount,
+            percentage: categories[0].percentage
+          }
+        : null;
+
+    const topExpenses = currentExpensesList.slice(0, 5).map((e: any) => ({
+      description: e.description,
+      amount: e.amount,
+      category: e.category,
+      date: new Date(e.date).toISOString().split('T')[0]
+    }));
+
+    // 7. Calculate concrete Save More Money opportunities (grounded in real data)
+    const savingsOpportunities: Array<{
+      category: string;
+      reason: string;
+      currentAmount: number;
+      suggestedReduction: number;
+      potentialSavingsIncrease: number;
+      currentActualSavings: number;
+      newProjectedSavings: number;
+    }> = [];
+
+    // Check categories with MoM increase
+    categories.forEach((c) => {
+      if (c.changeAmount > 0 && c.previousAmount > 0) {
+        // e.g. "Food spending increased by ₹800" -> suggest cutting by ₹500 or the increase
+        const cut = Math.max(100, Math.round(c.changeAmount * 0.6 / 50) * 50);
+        savingsOpportunities.push({
+          category: c.name,
+          reason: `increased by ${currency}${c.changeAmount.toLocaleString()} compared with last month`,
+          currentAmount: c.amount,
+          suggestedReduction: cut,
+          potentialSavingsIncrease: cut,
+          currentActualSavings: actualSavings,
+          newProjectedSavings: actualSavings + cut
+        });
+      } else if (c.status === 'OVER_BUDGET' && c.budget) {
+        const overage = Math.round(c.amount - c.budget);
+        savingsOpportunities.push({
+          category: c.name,
+          reason: `exceeded its budget limit by ${currency}${overage.toLocaleString()}`,
+          currentAmount: c.amount,
+          suggestedReduction: overage,
+          potentialSavingsIncrease: overage,
+          currentActualSavings: actualSavings,
+          newProjectedSavings: actualSavings + overage
+        });
+      }
+    });
+
+    // Check high discretionary category if not already in opportunities
+    const discretionary = ['Shopping', 'Entertainment', 'Food', 'Other'];
+    categories.forEach((c) => {
+      if (
+        discretionary.includes(c.name) &&
+        c.percentage >= 20 &&
+        !savingsOpportunities.some((o) => o.category === c.name)
+      ) {
+        const cut = Math.max(100, Math.round(c.amount * 0.15 / 50) * 50);
+        savingsOpportunities.push({
+          category: c.name,
+          reason: `represents ${c.percentage}% of your monthly expenses`,
+          currentAmount: c.amount,
+          suggestedReduction: cut,
+          potentialSavingsIncrease: cut,
+          currentActualSavings: actualSavings,
+          newProjectedSavings: actualSavings + cut
+        });
+      }
+    });
+
+    // 8. Assemble Full Financial Context Snapshot
     const snapshot: FinancialContextSnapshot = {
       currency,
       monthYear,
+      monthLabel,
+      hasTransactions,
+
+      financialSummary: {
+        income: monthlyIncome,
+        savingsTarget: monthlySavingsTarget,
+        spendingBudget,
+        totalExpenses,
+        actualSavings,
+        savingsRate,
+        targetSavingsRate,
+        remainingBudget,
+        transactionCount,
+        isOnTrackForTarget,
+        savingsDifference
+      },
+
+      previousMonthComparison: {
+        hasData: hasPreviousMonthData,
+        previousMonth,
+        previousMonthLabel,
+        previousExpenses,
+        previousSavings,
+        expensesDiff,
+        expensesPctChange,
+        trend
+      },
+
+      spendingAnalysis: {
+        topCategory,
+        categories,
+        topExpenses
+      },
+
+      savingsOpportunities,
+      budgetWarnings: budgetOverview.warnings,
+
+      goals: goals.map((g) => ({
+        title: g.title,
+        targetAmount: g.targetAmount,
+        currentAmount: g.currentAmount,
+        remainingAmount: Math.max(0, g.targetAmount - g.currentAmount),
+        progressPercentage: g.metrics.progressPercentage,
+        estimatedMonths: g.metrics.estimatedMonths,
+        isCompleted: g.metrics.isCompleted
+      })),
+
+      // Backward compatibility fields
       monthlyIncome,
       monthlySavingsTarget,
       spendingBudget,
@@ -98,30 +323,26 @@ export class AIService {
       savingsRate,
       targetSavingsRate,
       budgetStatus: budgetOverview.overallStatus,
-      categories,
-      budgetWarnings: budgetOverview.warnings,
-      goals: goals.map((g) => ({
-        title: g.title,
-        targetAmount: g.targetAmount,
-        currentAmount: g.currentAmount,
-        progressPercentage: g.metrics.progressPercentage,
-        estimatedMonths: g.metrics.estimatedMonths,
-        isCompleted: g.metrics.isCompleted
-      }))
+      categories
     };
 
-    // 3. Generate structured coaching insights
+    // 9. Generate structured coaching insights
     const aiResponse: AiCoachResponse = await GeminiFinancialCoach.generateCoaching(
       snapshot
     );
 
-    // 4. Save to database
+    // 10. Save to database
     const insight = await AIInsight.create({
       userId: userObjectId,
       monthYear,
       summary: aiResponse.summary,
-      insights: aiResponse.insights,
+      financialSummary: aiResponse.financialSummary,
+      spendingAnalysis: aiResponse.spendingAnalysis,
       warnings: aiResponse.warnings,
+      saveMoreOpportunities: aiResponse.saveMoreOpportunities,
+      goalProgress: aiResponse.goalProgress,
+      actionPlan: aiResponse.actionPlan,
+      insights: aiResponse.insights,
       recommendations: aiResponse.recommendations,
       goalAdvice: aiResponse.goalAdvice,
       disclaimer: aiResponse.disclaimer,

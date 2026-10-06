@@ -16,4 +16,14 @@ export const config = {
   jwtAccessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN || '7d',
   jwtRefreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  twelveDataApiKey: process.env.TWELVE_DATA_API_KEY || '',
+  goldApiKey: process.env.GOLD_API_KEY || '',
+  twelveDataDailyLimit: parseInt(process.env.TWELVE_DATA_DAILY_LIMIT || '700', 10),
+  smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+  smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
+  smtpSecure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPass: process.env.SMTP_PASS || '',
+  smtpFrom: process.env.SMTP_FROM || '',
 };
+

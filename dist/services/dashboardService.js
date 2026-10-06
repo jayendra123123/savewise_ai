@@ -15,8 +15,9 @@ class DashboardService {
     static async getDashboard(userId, targetMonthYear) {
         const userObjectId = new mongoose_1.default.Types.ObjectId(userId);
         const now = new Date();
-        const currentMonth = targetMonthYear ||
-            `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const currentMonth = targetMonthYear && /^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonthYear.trim())
+            ? targetMonthYear.trim()
+            : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         // 1. Get financial profile
         const profile = await FinancialProfile_1.FinancialProfile.findOne({ userId: userObjectId });
         const monthlyIncome = profile?.monthlyIncome || 0;
@@ -29,7 +30,7 @@ class DashboardService {
         const monthIndex = parseInt(monthStr, 10) - 1;
         const startOfMonth = new Date(Date.UTC(year, monthIndex, 1, 0, 0, 0));
         const endOfMonth = new Date(Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999));
-        // 3. Query expenses, category totals, and recent 5 txns in parallel
+        // 3. Query expenses, category totals, and recent txns for the active month in parallel
         const [expenseCategoryAgg, recentTransactions, budgetOverview, goals, latestAi] = await Promise.all([
             Expense_1.Expense.aggregate([
                 {
@@ -46,9 +47,12 @@ class DashboardService {
                 },
                 { $sort: { total: -1 } }
             ]),
-            Expense_1.Expense.find({ userId: userObjectId })
+            Expense_1.Expense.find({
+                userId: userObjectId,
+                date: { $gte: startOfMonth, $lte: endOfMonth }
+            })
                 .sort({ date: -1, createdAt: -1 })
-                .limit(5),
+                .limit(10),
             budgetService_1.BudgetService.getBudgetsForMonth(userId, currentMonth),
             goalService_1.GoalService.getGoals(userId),
             AIInsight_1.AIInsight.findOne({ userId: userObjectId, monthYear: currentMonth }).sort({

@@ -14,6 +14,10 @@ exports.createExpenseSchema = zod_1.z.object({
         .refine((val) => !val || !isNaN(Date.parse(val)), {
         message: 'Invalid date format'
     }),
+    selectedMonth: zod_1.z
+        .string()
+        .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'selectedMonth must be in YYYY-MM format')
+        .optional(),
     description: zod_1.z.string().min(1, 'Description is required').max(150),
     note: zod_1.z.string().max(500).optional()
 });
@@ -22,7 +26,7 @@ exports.expenseQuerySchema = zod_1.z.object({
     category: zod_1.z.enum(Expense_1.EXPENSE_CATEGORIES).optional(),
     month: zod_1.z
         .string()
-        .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Month must be in YYYY-MM format')
+        .regex(/^(\d{4}-(0[1-9]|1[0-2])|all)$/, 'Month must be in YYYY-MM format or all')
         .optional(),
     startDate: zod_1.z.string().optional(),
     endDate: zod_1.z.string().optional(),

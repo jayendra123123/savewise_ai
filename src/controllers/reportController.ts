@@ -11,7 +11,8 @@ export class ReportController {
   ): Promise<void> {
     try {
       const period = (req.query.period as ReportPeriod) || 'current_month';
-      const report = await ReportService.getReport(req.user!.userId, period);
+      const month = req.query.month as string | undefined;
+      const report = await ReportService.getReport(req.user!.userId, period, month);
       sendSuccess(res, report, 'Financial report retrieved successfully');
     } catch (err) {
       next(err);

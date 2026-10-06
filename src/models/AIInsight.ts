@@ -4,8 +4,33 @@ export interface IAIInsight extends Document {
   userId: Types.ObjectId;
   monthYear: string; // 'YYYY-MM'
   summary: string;
-  insights: string[];
+  financialSummary?: {
+    earnedText: string;
+    spentText: string;
+    savedText: string;
+    targetStatusText: string;
+    momChangeText: string;
+  };
+  spendingAnalysis?: {
+    overview: string;
+    topCategoryInsights: string[];
+    unnecessarySpending: string[];
+  };
   warnings: string[];
+  saveMoreOpportunities?: Array<{
+    category: string;
+    insight: string;
+    suggestedCut?: number;
+    potentialSavings?: number;
+    projectedSavingsTotal?: number;
+  }>;
+  goalProgress?: Array<{
+    goalTitle: string;
+    progressText: string;
+    advice: string;
+  }>;
+  actionPlan?: string[];
+  insights: string[];
   recommendations: string[];
   goalAdvice: string[];
   disclaimer: string;
@@ -30,11 +55,31 @@ const AIInsightSchema = new Schema<IAIInsight>(
       type: String,
       required: true
     },
-    insights: {
+    financialSummary: {
+      type: Schema.Types.Mixed,
+      default: null
+    },
+    spendingAnalysis: {
+      type: Schema.Types.Mixed,
+      default: null
+    },
+    warnings: {
       type: Schema.Types.Mixed,
       default: []
     },
-    warnings: {
+    saveMoreOpportunities: {
+      type: Schema.Types.Mixed,
+      default: []
+    },
+    goalProgress: {
+      type: Schema.Types.Mixed,
+      default: []
+    },
+    actionPlan: {
+      type: Schema.Types.Mixed,
+      default: []
+    },
+    insights: {
       type: Schema.Types.Mixed,
       default: []
     },
@@ -49,7 +94,7 @@ const AIInsightSchema = new Schema<IAIInsight>(
     disclaimer: {
       type: String,
       default:
-        'AI insights are for educational and informational purposes only and are not professional financial advice.'
+        'SaveWise AI Financial Coach insights are for educational and informational purposes only and do not constitute certified financial advice.'
     },
     rawMetricsSnapshot: {
       type: Schema.Types.Mixed,

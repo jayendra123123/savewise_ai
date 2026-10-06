@@ -15,11 +15,10 @@ describe('End-to-End Financial Flow & API Tests', () => {
   });
 
   afterAll(async () => {
-    // Clean up test database
-    if (mongoose.connection.db) {
-      await mongoose.connection.db.dropDatabase();
+    if (mongoose.connection.readyState !== 0 && userId) {
+      const { User } = await import('../../src/models/User');
+      await User.deleteOne({ _id: userId });
     }
-    await mongoose.disconnect();
   });
 
   describe('1. Authentication & Onboarding', () => {
@@ -198,5 +197,42 @@ describe('End-to-End Financial Flow & API Tests', () => {
       expect(coach.recommendations.length).toBeGreaterThan(0);
       expect(coach.disclaimer).toContain('educational and informational');
     }, 35000);
+  });
+
+  describe('7. Month-Aware Reports & Savings', () => {
+    it('retrieves reports anchored to the specified month', async () => {
+      const res = await request(app)
+        .get('/api/reports/summary?period=current_month&month=2026-10')
+        .set('Authorization', `Bearer ${accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.dateRange.startDate).toBe('2026-10-01');
+      expect(res.body.data.dateRange.endDate).toBe('2026-10-31');
+      expect(res.body.data.totalIncome).toBe(30000);
+    });
+
+    it('returns empty reports for month with zero transactions', async () => {
+      const res = await request(app)
+        .get('/api/reports/summary?period=current_month&month=2026-08')
+        .set('Authorization', `Bearer ${accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.totalExpenses).toBe(0);
+      expect(res.body.data.categoryBreakdown).toEqual([]);
+    });
+
+    it('retrieves savings summary for requested month', async () => {
+      const res = await request(app)
+        .get('/api/savings?month=2026-10')
+        .set('Authorization', `Bearer ${accessToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.currentMonth).toBe('2026-10');
+      expect(res.body.data.monthlyIncome).toBe(30000);
+      expect(res.body.data.monthlySavingsTarget).toBe(10000);
+    });
   });
 });

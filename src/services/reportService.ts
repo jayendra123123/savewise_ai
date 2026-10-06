@@ -49,34 +49,44 @@ export interface ReportsSummary {
 export class ReportService {
   static async getReport(
     userId: string,
-    period: ReportPeriod = 'current_month'
+    period: ReportPeriod = 'current_month',
+    targetMonthYear?: string
   ): Promise<ReportsSummary> {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const profile = await FinancialProfile.findOne({ userId: userObjectId });
     const monthlyIncome = profile?.monthlyIncome || 0;
 
     const now = new Date();
+    let baseYear = now.getFullYear();
+    let baseMonth = now.getMonth(); // 0-indexed
+
+    if (targetMonthYear && /^\d{4}-(0[1-9]|1[0-2])$/.test(targetMonthYear.trim())) {
+      const [y, m] = targetMonthYear.trim().split('-').map(Number);
+      baseYear = y;
+      baseMonth = m - 1;
+    }
+
     let startDate: Date;
     let endDate: Date;
     let monthsToInclude = 1;
 
     if (period === 'current_month') {
-      startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
-      endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59));
+      startDate = new Date(Date.UTC(baseYear, baseMonth, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(baseYear, baseMonth + 1, 0, 23, 59, 59, 999));
       monthsToInclude = 1;
     } else if (period === 'prev_month') {
-      startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1));
-      endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 0, 23, 59, 59));
+      startDate = new Date(Date.UTC(baseYear, baseMonth - 1, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(baseYear, baseMonth, 0, 23, 59, 59, 999));
       monthsToInclude = 1;
     } else if (period === 'last_6_months') {
-      startDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 5, 1));
-      endDate = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59));
+      startDate = new Date(Date.UTC(baseYear, baseMonth - 5, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(baseYear, baseMonth + 1, 0, 23, 59, 59, 999));
       monthsToInclude = 6;
     } else {
-      // current year
-      startDate = new Date(Date.UTC(now.getFullYear(), 0, 1));
-      endDate = new Date(Date.UTC(now.getFullYear(), 11, 31, 23, 59, 59));
-      monthsToInclude = now.getMonth() + 1;
+      // year
+      startDate = new Date(Date.UTC(baseYear, 0, 1, 0, 0, 0));
+      endDate = new Date(Date.UTC(baseYear, 11, 31, 23, 59, 59, 999));
+      monthsToInclude = baseMonth + 1;
     }
 
     // 1. Expenses in range
@@ -136,8 +146,8 @@ export class ReportService {
       };
     });
 
-    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const budgetOverview = await BudgetService.getBudgetsForMonth(userId, currentMonthKey);
+    const selectedMonthKey = `${baseYear}-${String(baseMonth + 1).padStart(2, '0')}`;
+    const budgetOverview = await BudgetService.getBudgetsForMonth(userId, selectedMonthKey);
 
     const completedGoals = goals.filter((g) => g.metrics.isCompleted).length;
     const averageProgress =

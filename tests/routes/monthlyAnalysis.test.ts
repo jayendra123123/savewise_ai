@@ -12,7 +12,9 @@ describe('Monthly Financial Analysis API & Calculations', () => {
   const otherEmail = `other_user_${Date.now()}@savewise.app`;
 
   beforeAll(async () => {
-    await mongoose.connect(config.mongodbUri);
+    if (mongoose.connection.readyState === 0) {
+      await mongoose.connect(config.mongodbUri);
+    }
 
     // Register primary user
     const res = await request(app)
@@ -423,5 +425,11 @@ describe('Monthly Financial Analysis API & Calculations', () => {
     expect(months.has(7)).toBe(true); // August
     expect(months.has(8)).toBe(true); // September
     expect(months.has(9)).toBe(true); // October
+  });
+
+  afterAll(async () => {
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
+    }
   });
 });
