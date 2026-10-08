@@ -40,6 +40,29 @@ const FALLBACK_METALS: Record<'XAU' | 'XAG', { name: string; price: number; gram
   }
 };
 
+const FALLBACK_METALS_INR: Record<'XAU' | 'XAG', { name: string; price: number; gram24k: number; gram22k: number; change: number; pct: number; high: number; low: number }> = {
+  XAU: {
+    name: 'Gold (XAU/INR)',
+    price: 399680.00,
+    gram24k: 12849.99,
+    gram22k: 11779.58,
+    change: 850.00,
+    pct: 0.21,
+    high: 401000.00,
+    low: 398000.00
+  },
+  XAG: {
+    name: 'Silver (XAG/INR)',
+    price: 5730.00,
+    gram24k: 184.22,
+    gram22k: 168.88,
+    change: 32.50,
+    pct: 0.57,
+    high: 5800.00,
+    low: 5690.00
+  }
+};
+
 // In-memory tracking of high, low, and previous price across sessions
 const sessionMetalQuotes: Record<string, { previousPrice: number; high: number; low: number }> = {};
 
@@ -137,7 +160,7 @@ export class GoldApiService {
    */
   static async getMetalPrice(
     metal: 'XAU' | 'XAG',
-    currency = 'USD'
+    currency = 'INR'
   ): Promise<MetalPriceResult> {
     const symbol = metal.toUpperCase() as 'XAU' | 'XAG';
     const curr = currency.toUpperCase();
@@ -195,7 +218,7 @@ export class GoldApiService {
 
       return {
         symbol,
-        name: data.name ? `${data.name} (${symbol}/${curr})` : symbol === 'XAU' ? 'Gold (XAU/USD)' : 'Silver (XAG/USD)',
+        name: data.name ? `${data.name} (${symbol}/${curr})` : symbol === 'XAU' ? `Gold (${symbol}/${curr})` : `Silver (${symbol}/${curr})`,
         price,
         priceGram24k: gram24k,
         priceGram22k: gram22k,
@@ -220,7 +243,9 @@ export class GoldApiService {
     symbol: 'XAU' | 'XAG',
     currency: string
   ): MetalPriceResult {
-    const base = FALLBACK_METALS[symbol] || FALLBACK_METALS.XAU;
+    const isINR = currency.toUpperCase() === 'INR';
+    const dict = isINR ? FALLBACK_METALS_INR : FALLBACK_METALS;
+    const base = dict[symbol] || dict.XAU;
     return {
       symbol,
       name: base.name,

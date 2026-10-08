@@ -12,6 +12,7 @@ const goldApiService_1 = require("./goldApiService");
 const TwelveDataUsage_1 = require("../models/TwelveDataUsage");
 const emailService_1 = require("./emailService");
 const User_1 = require("../models/User");
+const metalAnalysisAi_1 = require("../ai/metalAnalysisAi");
 class MarketMonitoringService {
     // Cache TTL: 60 seconds to conserve Twelve Data 700-credit budget
     static CACHE_TTL_MS = 60 * 1000;
@@ -229,24 +230,103 @@ class MarketMonitoringService {
         };
     }
     /**
-     * Creates a user-defined price alert.
+     * Fetches real-time precious metal market data along with Gemini AI trend analysis.
+     */
+    static async getMetalAnalysis(metal, currency = 'USD') {
+        const symbol = metal === 'GOLD' ? 'XAU' : 'XAG';
+        const quote = await goldApiService_1.GoldApiService.getMetalPrice(symbol, currency);
+        const aiAnalysis = await metalAnalysisAi_1.MetalAnalysisAiService.analyzeMetal({
+            metal,
+            symbol,
+            price: quote.price,
+            priceGram24k: quote.priceGram24k,
+            priceGram22k: quote.priceGram22k,
+            change: quote.change,
+            percentChange: quote.percentChange,
+            high: quote.high,
+            low: quote.low,
+            currency
+        });
+        return {
+            price: quote,
+            aiAnalysis
+        };
+    }
+    /**
+     * Creates a user-defined price alert with user intention and Gemini AI market analysis.
      */
     static async createAlert(userId, data) {
         const userObjectId = new mongoose_1.default.Types.ObjectId(userId);
         const cleanSymbol = data.symbol.trim().toUpperCase();
-        // Fetch initial asset price
+        // Determine condition based on intention if provided
+        let resolvedIntention = data.intention || 'PRICE_THRESHOLD';
+        let resolvedCondition = data.condition || 'ABOVE';
+        if (resolvedIntention === 'BUY_ON_FALL') {
+            resolvedCondition = 'BELOW';
+        }
+        else if (resolvedIntention === 'MONITOR_GROWTH') {
+            resolvedCondition = 'ABOVE';
+        }
+        else if (data.condition) {
+            resolvedCondition = data.condition;
+            resolvedIntention = resolvedCondition === 'BELOW' ? 'BUY_ON_FALL' : 'MONITOR_GROWTH';
+        }
+        // Fetch initial asset price from real market feeds
         const currentPriceInfo = await this.getAssetPrice(data.assetType, cleanSymbol, data.currency || 'USD');
         const assetName = data.assetName || currentPriceInfo.name;
+        // Generate Gemini AI educational trend analysis for Precious Metals
+        let aiAnalysis = null;
+        if (data.assetType === 'GOLD' || cleanSymbol === 'XAU' || data.assetType === 'SILVER' || cleanSymbol === 'XAG') {
+            try {
+                const isGold = data.assetType === 'GOLD' || cleanSymbol === 'XAU';
+                const metalQuote = await goldApiService_1.GoldApiService.getMetalPrice(isGold ? 'XAU' : 'XAG', data.currency || 'USD');
+                const ai = await metalAnalysisAi_1.MetalAnalysisAiService.analyzeMetal({
+                    metal: isGold ? 'GOLD' : 'SILVER',
+                    symbol: isGold ? 'XAU' : 'XAG',
+                    price: currentPriceInfo.price,
+                    priceGram24k: metalQuote.priceGram24k,
+                    priceGram22k: metalQuote.priceGram22k,
+                    change: currentPriceInfo.change,
+                    percentChange: currentPriceInfo.percentChange,
+                    high: currentPriceInfo.high,
+                    low: currentPriceInfo.low,
+                    currency: data.currency || 'USD',
+                    intention: resolvedIntention,
+                    targetPrice: data.targetPrice
+                });
+                aiAnalysis = {
+                    trend: ai.trend,
+                    summary: ai.summary,
+                    explanation: ai.explanation,
+                    recommendation: ai.recommendation,
+                    educationalTakeaway: ai.educationalTakeaway,
+                    analyzedAt: ai.analyzedAt
+                };
+            }
+            catch (aiErr) {
+                console.warn('[Market Monitoring] Gemini analysis notice during alert creation:', aiErr);
+            }
+        }
         // Check if the condition is already met upon creation
         let isAlreadyTriggered = false;
         let notificationMsg = null;
-        if (data.condition === 'ABOVE' && currentPriceInfo.price >= data.targetPrice) {
+        if (resolvedCondition === 'ABOVE' && currentPriceInfo.price >= data.targetPrice) {
             isAlreadyTriggered = true;
-            notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) rose above $${data.targetPrice.toLocaleString()}! Current price is $${currentPriceInfo.price.toLocaleString()}.`;
+            if (resolvedIntention === 'MONITOR_GROWTH') {
+                notificationMsg = `📈 Investment Target Hit: ${assetName} (${cleanSymbol}) reached $${currentPriceInfo.price.toLocaleString()} (Target: $${data.targetPrice.toLocaleString()}).`;
+            }
+            else {
+                notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) rose above $${data.targetPrice.toLocaleString()}! Current price is $${currentPriceInfo.price.toLocaleString()}.`;
+            }
         }
-        else if (data.condition === 'BELOW' && currentPriceInfo.price <= data.targetPrice) {
+        else if (resolvedCondition === 'BELOW' && currentPriceInfo.price <= data.targetPrice) {
             isAlreadyTriggered = true;
-            notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) fell below $${data.targetPrice.toLocaleString()}! Current price is $${currentPriceInfo.price.toLocaleString()}.`;
+            if (resolvedIntention === 'BUY_ON_FALL') {
+                notificationMsg = `🟢 Buying Opportunity: ${assetName} (${cleanSymbol}) dipped to $${currentPriceInfo.price.toLocaleString()} (Buy Target: $${data.targetPrice.toLocaleString()}).`;
+            }
+            else {
+                notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) fell below $${data.targetPrice.toLocaleString()}! Current price is $${currentPriceInfo.price.toLocaleString()}.`;
+            }
         }
         const alert = await PriceAlert_1.PriceAlert.create({
             userId: userObjectId,
@@ -255,7 +335,8 @@ class MarketMonitoringService {
             assetName,
             targetPrice: data.targetPrice,
             currency: data.currency || 'USD',
-            condition: data.condition,
+            condition: resolvedCondition,
+            intention: resolvedIntention,
             initialPrice: currentPriceInfo.price,
             currentPrice: currentPriceInfo.price,
             status: isAlreadyTriggered ? 'TRIGGERED' : 'ACTIVE',
@@ -265,7 +346,8 @@ class MarketMonitoringService {
             isRead: false,
             emailSent: false,
             emailSentAt: null,
-            notes: data.notes || null
+            notes: data.notes || null,
+            aiAnalysis
         });
         // If already met on creation, immediately trigger email notification
         if (isAlreadyTriggered) {
@@ -277,10 +359,12 @@ class MarketMonitoringService {
                         recipientName: user.fullName || 'SaveWise Member',
                         assetName,
                         symbol: cleanSymbol,
-                        condition: data.condition,
+                        condition: resolvedCondition,
+                        intention: resolvedIntention,
                         targetPrice: data.targetPrice,
                         currentPrice: currentPriceInfo.price,
-                        currency: data.currency || 'USD'
+                        currency: data.currency || 'USD',
+                        aiAnalysis
                     });
                     if (sent) {
                         alert.emailSent = true;
@@ -389,11 +473,21 @@ class MarketMonitoringService {
             let notificationMsg = '';
             if (alert.condition === 'ABOVE' && currentPrice >= alert.targetPrice) {
                 isTriggered = true;
-                notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) rose above $${alert.targetPrice.toLocaleString()}! Current price is $${currentPrice.toLocaleString()}.`;
+                if (alert.intention === 'MONITOR_GROWTH') {
+                    notificationMsg = `📈 Investment Target Hit: ${alert.assetName} (${alert.symbol}) reached $${currentPrice.toLocaleString()} (Target: $${alert.targetPrice.toLocaleString()}).`;
+                }
+                else {
+                    notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) rose above $${alert.targetPrice.toLocaleString()}! Current price is $${currentPrice.toLocaleString()}.`;
+                }
             }
             else if (alert.condition === 'BELOW' && currentPrice <= alert.targetPrice) {
                 isTriggered = true;
-                notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) fell below $${alert.targetPrice.toLocaleString()}! Current price is $${currentPrice.toLocaleString()}.`;
+                if (alert.intention === 'BUY_ON_FALL') {
+                    notificationMsg = `🟢 Buying Opportunity: ${alert.assetName} (${alert.symbol}) dipped to $${currentPrice.toLocaleString()} (Buy Target: $${alert.targetPrice.toLocaleString()}).`;
+                }
+                else {
+                    notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) fell below $${alert.targetPrice.toLocaleString()}! Current price is $${currentPrice.toLocaleString()}.`;
+                }
             }
             if (isTriggered) {
                 alert.status = 'TRIGGERED';
@@ -402,7 +496,7 @@ class MarketMonitoringService {
                 alert.notificationMessage = notificationMsg;
                 alert.isRead = false;
                 newlyTriggered.push(alert);
-                // Send email notification to authenticated user via Nodemailer + SMTP
+                // Send email notification to authenticated user via Nodemailer + SMTP (guaranteed deduplication)
                 if (!alert.emailSent) {
                     const user = alert.userId;
                     if (user && user.email) {
@@ -413,9 +507,11 @@ class MarketMonitoringService {
                                 assetName: alert.assetName,
                                 symbol: alert.symbol,
                                 condition: alert.condition,
+                                intention: alert.intention,
                                 targetPrice: alert.targetPrice,
                                 currentPrice: currentPrice,
-                                currency: alert.currency || 'USD'
+                                currency: alert.currency || 'USD',
+                                aiAnalysis: alert.aiAnalysis
                             });
                             if (sent) {
                                 alert.emailSent = true;

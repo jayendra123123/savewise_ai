@@ -65,16 +65,32 @@ class MarketController {
         }
     }
     /**
+     * GET /api/market/metal-analysis
+     * Returns live Gold or Silver prices coupled with Gemini AI trend analysis.
+     */
+    static async getMetalAnalysis(req, res, next) {
+        try {
+            const metalParam = (req.query.metal || 'GOLD').toUpperCase();
+            const metal = metalParam === 'SILVER' || metalParam === 'XAG' ? 'SILVER' : 'GOLD';
+            const currency = req.query.currency || 'USD';
+            const analysis = await marketMonitoringService_1.MarketMonitoringService.getMetalAnalysis(metal, currency);
+            (0, apiResponse_1.sendSuccess)(res, analysis, `${metal} market data & Gemini AI analysis retrieved`);
+        }
+        catch (err) {
+            next(err);
+        }
+    }
+    /**
      * POST /api/market/alerts
-     * Creates a new user price alert.
+     * Creates a new user price alert with user intention & AI insights.
      */
     static async createAlert(req, res, next) {
         try {
-            const { assetType, symbol, assetName, targetPrice, condition, currency, notes } = req.body;
-            if (!symbol || !targetPrice || !condition) {
+            const { assetType, symbol, assetName, targetPrice, condition, intention, currency, notes } = req.body;
+            if (!symbol || !targetPrice) {
                 res.status(400).json({
                     success: false,
-                    error: 'Symbol, targetPrice, and condition are required.'
+                    error: 'Symbol and targetPrice are required.'
                 });
                 return;
             }
@@ -86,13 +102,22 @@ class MarketController {
                 });
                 return;
             }
-            const cleanCondition = condition.toUpperCase();
-            if (!['ABOVE', 'BELOW'].includes(cleanCondition)) {
-                res.status(400).json({
-                    success: false,
-                    error: 'Condition must be either ABOVE or BELOW.'
-                });
-                return;
+            let cleanCondition = 'ABOVE';
+            if (condition) {
+                cleanCondition = condition.toUpperCase();
+                if (!['ABOVE', 'BELOW'].includes(cleanCondition)) {
+                    res.status(400).json({
+                        success: false,
+                        error: 'Condition must be either ABOVE or BELOW.'
+                    });
+                    return;
+                }
+            }
+            else if (intention === 'BUY_ON_FALL') {
+                cleanCondition = 'BELOW';
+            }
+            else if (intention === 'MONITOR_GROWTH') {
+                cleanCondition = 'ABOVE';
             }
             const cleanAssetType = (assetType ? assetType.toUpperCase() : 'STOCK');
             const alert = await marketMonitoringService_1.MarketMonitoringService.createAlert(req.user.userId, {
@@ -101,6 +126,7 @@ class MarketController {
                 assetName,
                 targetPrice: numTarget,
                 condition: cleanCondition,
+                intention,
                 currency: currency || 'USD',
                 notes
             });

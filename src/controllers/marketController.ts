@@ -87,8 +87,29 @@ export class MarketController {
   }
 
   /**
+   * GET /api/market/metal-analysis
+   * Returns live Gold or Silver prices coupled with AI trend analysis.
+   */
+  static async getMetalAnalysis(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const metalParam = ((req.query.metal as string) || 'GOLD').toUpperCase();
+      const metal: 'GOLD' | 'SILVER' = metalParam === 'SILVER' || metalParam === 'XAG' ? 'SILVER' : 'GOLD';
+      const currency = (req.query.currency as string) || 'INR';
+
+      const analysis = await MarketMonitoringService.getMetalAnalysis(metal, currency);
+      sendSuccess(res, analysis, `${metal} market data & AI analysis retrieved`);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * POST /api/market/alerts
-   * Creates a new user price alert.
+   * Creates a new user price alert with user intention & AI insights.
    */
   static async createAlert(
     req: AuthenticatedRequest,
@@ -96,12 +117,12 @@ export class MarketController {
     next: NextFunction
   ): Promise<void> {
     try {
-      const { assetType, symbol, assetName, targetPrice, condition, currency, notes } = req.body;
+      const { assetType, symbol, assetName, targetPrice, condition, intention, currency, notes } = req.body;
 
-      if (!symbol || !targetPrice || !condition) {
+      if (!symbol || !targetPrice) {
         res.status(400).json({
           success: false,
-          error: 'Symbol, targetPrice, and condition are required.'
+          error: 'Symbol and targetPrice are required.'
         });
         return;
       }
@@ -115,13 +136,20 @@ export class MarketController {
         return;
       }
 
-      const cleanCondition = condition.toUpperCase() as AlertCondition;
-      if (!['ABOVE', 'BELOW'].includes(cleanCondition)) {
-        res.status(400).json({
-          success: false,
-          error: 'Condition must be either ABOVE or BELOW.'
-        });
-        return;
+      let cleanCondition: AlertCondition = 'ABOVE';
+      if (condition) {
+        cleanCondition = condition.toUpperCase() as AlertCondition;
+        if (!['ABOVE', 'BELOW'].includes(cleanCondition)) {
+          res.status(400).json({
+            success: false,
+            error: 'Condition must be either ABOVE or BELOW.'
+          });
+          return;
+        }
+      } else if (intention === 'BUY_ON_FALL') {
+        cleanCondition = 'BELOW';
+      } else if (intention === 'MONITOR_GROWTH') {
+        cleanCondition = 'ABOVE';
       }
 
       const cleanAssetType = (assetType ? assetType.toUpperCase() : 'STOCK') as AssetType;
@@ -132,6 +160,7 @@ export class MarketController {
         assetName,
         targetPrice: numTarget,
         condition: cleanCondition,
+        intention,
         currency: currency || 'USD',
         notes
       });

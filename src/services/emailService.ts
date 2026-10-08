@@ -10,6 +10,14 @@ export interface SendPriceAlertEmailOptions {
   targetPrice: number;
   currentPrice: number;
   currency?: string;
+  intention?: 'BUY_ON_FALL' | 'MONITOR_GROWTH' | 'PRICE_THRESHOLD';
+  aiAnalysis?: {
+    trend?: string;
+    summary?: string;
+    explanation?: string;
+    recommendation?: string;
+    educationalTakeaway?: string;
+  } | null;
 }
 
 export type TodoReminderType = 'DUE_TODAY_SLOT' | 'DAY_BEFORE' | 'DUE_DATE_EVENING';
@@ -61,26 +69,79 @@ export class EmailService {
   }
 
   /**
-   * Sends a styled HTML price alert notification email.
+   * Sends a styled HTML price alert notification email tailored to the user's intention.
    */
   static async sendPriceAlertEmail(options: SendPriceAlertEmailOptions): Promise<boolean> {
     try {
       const transporter = this.getTransporter();
-      const curr = options.currency || 'USD';
-      const formattedTarget = options.targetPrice.toLocaleString(undefined, {
+      const curr = options.currency === 'INR' ? '₹' : (options.currency === 'EUR' ? '€' : (options.currency === 'GBP' ? '£' : '$'));
+      const locale = options.currency === 'INR' ? 'en-IN' : 'en-US';
+      const formattedTarget = options.targetPrice.toLocaleString(locale, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       });
-      const formattedCurrent = options.currentPrice.toLocaleString(undefined, {
+      const formattedCurrent = options.currentPrice.toLocaleString(locale, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       });
 
-      const directionText = options.condition === 'ABOVE' ? 'rose above' : 'fell below';
-      const conditionBadgeColor = options.condition === 'ABOVE' ? '#10B981' : '#F59E0B';
-      const conditionBadgeText = options.condition === 'ABOVE' ? '▲ Target Exceeded' : '▼ Target Reached';
+      const intention = options.intention || (options.condition === 'BELOW' ? 'BUY_ON_FALL' : 'MONITOR_GROWTH');
+      let subject = '';
+      let headline = '';
+      let intentionBadgeText = '';
+      let intentionBadgeColor = '#10B981';
+      let messageParagraph = '';
 
-      const subject = `🎯 Price Alert Triggered: ${options.assetName} (${options.symbol}) is now ${curr} ${formattedCurrent}`;
+      if (intention === 'BUY_ON_FALL') {
+        subject = `🟢 Buying Opportunity: ${options.assetName} (${options.symbol}) dipped to ${curr} ${formattedCurrent}`;
+        headline = 'Buy-on-Dip Target Triggered';
+        intentionBadgeText = '🛒 BUY OPPORTUNITY • DIP TARGET REACHED';
+        intentionBadgeColor = '#10B981'; // Emerald Green
+        messageParagraph = `The spot price for <strong>${options.assetName} (${options.symbol})</strong> has dipped to or below your configured purchase target of <strong>${curr} ${formattedTarget}</strong>. If your financial plan includes accumulating this asset, the market entry condition is currently met.`;
+      } else if (intention === 'MONITOR_GROWTH') {
+        subject = `📈 Investment Target Hit: ${options.assetName} (${options.symbol}) reached ${curr} ${formattedCurrent}`;
+        headline = 'Investment Growth Target Reached';
+        intentionBadgeText = '🚀 INVESTMENT GROWTH • TARGET HIT';
+        intentionBadgeColor = '#6366F1'; // Indigo Purple
+        messageParagraph = `Your monitored position in <strong>${options.assetName} (${options.symbol})</strong> has risen to or above your upside target of <strong>${curr} ${formattedTarget}</strong>.`;
+      } else {
+        const directionText = options.condition === 'ABOVE' ? 'rose above' : 'fell below';
+        subject = `🎯 Price Alert: ${options.assetName} (${options.symbol}) is now ${curr} ${formattedCurrent}`;
+        headline = 'Price Threshold Triggered';
+        intentionBadgeText = options.condition === 'ABOVE' ? '▲ TARGET EXCEEDED' : '▼ TARGET REACHED';
+        intentionBadgeColor = options.condition === 'ABOVE' ? '#10B981' : '#F59E0B';
+        messageParagraph = `Your market price alert for <strong>${options.assetName} (${options.symbol})</strong> has been triggered. The price ${directionText} your target of <strong>${curr} ${formattedTarget}</strong>.`;
+      }
+
+      const ai = options.aiAnalysis;
+      const trendColor = ai?.trend === 'BULLISH' ? '#10B981' : ai?.trend === 'BEARISH' ? '#DC2626' : '#64748B';
+
+      const aiSectionHtml = ai ? `
+        <div style="background: linear-gradient(135deg, #EEF2FF 0%, #F5F3FF 100%); border: 1px solid #C7D2FE; border-radius: 12px; padding: 18px 20px; margin: 24px 0;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+            <div style="font-size: 13px; font-weight: 700; color: #4338CA; text-transform: uppercase; letter-spacing: 0.5px;">
+              ✦ SaveWise AI Market Intelligence
+            </div>
+            <span style="display: inline-block; padding: 3px 10px; background-color: ${trendColor}; color: white; border-radius: 12px; font-size: 11px; font-weight: 700;">
+              ${ai.trend || 'ANALYZED'}
+            </span>
+          </div>
+          <p style="font-size: 14px; color: #1E1B4B; line-height: 1.5; margin: 0 0 10px 0;">
+            ${ai.summary || ''}
+          </p>
+          ${ai.recommendation ? `
+            <div style="background: #FFFFFF; border-radius: 8px; padding: 10px 14px; margin-top: 8px; border-left: 3px solid #6366F1;">
+              <div style="font-size: 11px; font-weight: 700; color: #6366F1; text-transform: uppercase; margin-bottom: 4px;">Educational Recommendation</div>
+              <div style="font-size: 13px; color: #334155; line-height: 1.4;">${ai.recommendation}</div>
+            </div>
+          ` : ''}
+          ${ai.educationalTakeaway ? `
+            <p style="font-size: 12px; color: #64748B; margin: 10px 0 0 0; font-style: italic;">
+              💡 ${ai.educationalTakeaway}
+            </p>
+          ` : ''}
+        </div>
+      ` : '';
 
       const html = `
 <!DOCTYPE html>
@@ -90,11 +151,11 @@ export class EmailService {
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F8FAFC; margin: 0; padding: 24px; color: #1E293B; }
     .card { max-width: 580px; margin: 0 auto; background: #FFFFFF; border-radius: 16px; border: 1px solid #E2E8F0; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
-    .header { background: linear-gradient(135deg, #6366F1 0%, #4338CA 100%); padding: 32px 24px; text-align: center; color: #FFFFFF; }
+    .header { background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%); padding: 32px 24px; text-align: center; color: #FFFFFF; }
     .header h1 { margin: 0 0 6px 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
     .header p { margin: 0; font-size: 14px; opacity: 0.9; }
     .content { padding: 32px 28px; }
-    .badge { display: inline-block; padding: 6px 14px; background-color: ${conditionBadgeColor}; color: white; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 20px; }
+    .badge { display: inline-block; padding: 6px 14px; background-color: ${intentionBadgeColor}; color: white; border-radius: 20px; font-size: 12px; font-weight: 700; margin-bottom: 20px; letter-spacing: 0.3px; }
     .price-box { background: #F1F5F9; border-radius: 12px; padding: 20px; margin: 20px 0; text-align: center; }
     .price-label { font-size: 13px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 4px; }
     .price-value { font-size: 32px; font-weight: 800; color: #0F172A; }
@@ -109,21 +170,21 @@ export class EmailService {
   <div class="card">
     <div class="header">
       <h1>SaveWise AI • Market Monitor</h1>
-      <p>Real-Time Price Alert Notification</p>
+      <p>${headline}</p>
     </div>
     <div class="content">
       <div style="text-align: center;">
-        <span class="badge">${conditionBadgeText}</span>
+        <span class="badge">${intentionBadgeText}</span>
       </div>
       <p style="font-size: 16px; line-height: 1.5; margin-top: 0;">
         Hello <strong>${options.recipientName}</strong>,
       </p>
       <p style="font-size: 15px; color: #475569; line-height: 1.5;">
-        Your market price alert for <strong>${options.assetName} (${options.symbol})</strong> has just been triggered. The price ${directionText} your target price of <strong>${curr} ${formattedTarget}</strong>.
+        ${messageParagraph}
       </p>
       
       <div class="price-box">
-        <div class="price-label">Current Market Price</div>
+        <div class="price-label">Current Spot Market Price</div>
         <div class="price-value">${curr} ${formattedCurrent}</div>
       </div>
 
@@ -133,21 +194,24 @@ export class EmailService {
           <td class="value">${options.assetName} (${options.symbol})</td>
         </tr>
         <tr>
-          <td class="label">Target Trigger Price</td>
+          <td class="label">Your Target Price</td>
           <td class="value">${curr} ${formattedTarget}</td>
         </tr>
         <tr>
-          <td class="label">Condition</td>
-          <td class="value">${options.condition === 'ABOVE' ? 'Above Target (≥)' : 'Below Target (≤)'}</td>
+          <td class="label">Configured Strategy</td>
+          <td class="value">${intention === 'BUY_ON_FALL' ? 'Buy when price falls' : intention === 'MONITOR_GROWTH' ? 'Monitor investment (notify on rise)' : options.condition === 'ABOVE' ? 'Above Target' : 'Below Target'}</td>
         </tr>
         <tr>
           <td class="label">Time Triggered</td>
           <td class="value">${new Date().toLocaleString('en-US', { timeZoneName: 'short' })}</td>
         </tr>
       </table>
+
+      ${aiSectionHtml}
     </div>
     <div class="footer">
-      <p style="margin: 0;">SaveWise AI Automated Market Engine • Please do not reply directly to this email.</p>
+      <p style="margin: 0 0 6px 0;">SaveWise AI Automated Market Engine • Educational Insights Only</p>
+      <p style="margin: 0; font-size: 11px; color: #CBD5E1;">This automated notification is for informational tracking and does not execute orders or provide financial advice.</p>
     </div>
   </div>
 </body>
@@ -163,7 +227,7 @@ export class EmailService {
         to: options.to,
         subject,
         html,
-        text: `SaveWise AI Alert: ${options.assetName} (${options.symbol}) ${directionText} ${curr} ${formattedTarget}. Current price is ${curr} ${formattedCurrent}.`
+        text: `SaveWise AI Alert: ${options.assetName} (${options.symbol}) reached ${curr} ${formattedCurrent} (Your target: ${curr} ${formattedTarget}). Strategy: ${intention}.`
       });
 
       console.log(`[EmailService] Price alert email sent to ${options.to}. MessageId: ${info.messageId || 'simulated'}`);

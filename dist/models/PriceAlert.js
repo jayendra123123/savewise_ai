@@ -75,6 +75,11 @@ const PriceAlertSchema = new mongoose_1.Schema({
         enum: ['ABOVE', 'BELOW'],
         required: true
     },
+    intention: {
+        type: String,
+        enum: ['BUY_ON_FALL', 'MONITOR_GROWTH', 'PRICE_THRESHOLD'],
+        default: 'PRICE_THRESHOLD'
+    },
     initialPrice: {
         type: Number,
         required: true,
@@ -119,6 +124,14 @@ const PriceAlertSchema = new mongoose_1.Schema({
         type: String,
         default: null,
         maxlength: 250
+    },
+    aiAnalysis: {
+        trend: { type: String, enum: ['BULLISH', 'BEARISH', 'NEUTRAL'] },
+        summary: { type: String },
+        explanation: { type: String },
+        recommendation: { type: String },
+        educationalTakeaway: { type: String },
+        analyzedAt: { type: Date }
     }
 }, {
     timestamps: true

@@ -10,6 +10,7 @@ router.use(requireAuth);
 router.get('/usage', MarketController.getUsage);
 router.get('/watchlist', MarketController.getWatchlist);
 router.get('/price', MarketController.getPrice);
+router.get('/metal-analysis', MarketController.getMetalAnalysis);
 router.get('/alerts', MarketController.getAlerts);
 router.post('/alerts', MarketController.createAlert);
 router.put('/alerts/:id/toggle', MarketController.toggleAlert);

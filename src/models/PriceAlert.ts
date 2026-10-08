@@ -3,6 +3,16 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export type AssetType = 'STOCK' | 'GOLD' | 'SILVER';
 export type AlertCondition = 'ABOVE' | 'BELOW';
 export type AlertStatus = 'ACTIVE' | 'TRIGGERED' | 'DISABLED';
+export type AlertIntention = 'BUY_ON_FALL' | 'MONITOR_GROWTH' | 'PRICE_THRESHOLD';
+
+export interface IPriceAlertAiAnalysis {
+  trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  summary: string;
+  explanation?: string;
+  recommendation?: string;
+  educationalTakeaway?: string;
+  analyzedAt: Date;
+}
 
 export interface IPriceAlert extends Document {
   userId: Types.ObjectId;
@@ -12,6 +22,7 @@ export interface IPriceAlert extends Document {
   targetPrice: number;
   currency: string;
   condition: AlertCondition;
+  intention?: AlertIntention;
   initialPrice: number;
   currentPrice: number | null;
   status: AlertStatus;
@@ -22,6 +33,7 @@ export interface IPriceAlert extends Document {
   emailSent: boolean;
   emailSentAt: Date | null;
   notes?: string | null;
+  aiAnalysis?: IPriceAlertAiAnalysis | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -67,6 +79,11 @@ const PriceAlertSchema = new Schema<IPriceAlert>(
       enum: ['ABOVE', 'BELOW'],
       required: true
     },
+    intention: {
+      type: String,
+      enum: ['BUY_ON_FALL', 'MONITOR_GROWTH', 'PRICE_THRESHOLD'],
+      default: 'PRICE_THRESHOLD'
+    },
     initialPrice: {
       type: Number,
       required: true,
@@ -111,6 +128,14 @@ const PriceAlertSchema = new Schema<IPriceAlert>(
       type: String,
       default: null,
       maxlength: 250
+    },
+    aiAnalysis: {
+      trend: { type: String, enum: ['BULLISH', 'BEARISH', 'NEUTRAL'] },
+      summary: { type: String },
+      explanation: { type: String },
+      recommendation: { type: String },
+      educationalTakeaway: { type: String },
+      analyzedAt: { type: Date }
     }
   },
   {

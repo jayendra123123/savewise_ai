@@ -1,11 +1,12 @@
 import mongoose from 'mongoose';
-import { PriceAlert, IPriceAlert, AssetType, AlertCondition } from '../models/PriceAlert';
+import { PriceAlert, IPriceAlert, AssetType, AlertCondition, AlertIntention, IPriceAlertAiAnalysis } from '../models/PriceAlert';
 import { MarketPriceCache } from '../models/MarketPriceCache';
 import { TwelveDataService, TwelveDataLimitReachedError } from './twelveDataService';
-import { GoldApiService } from './goldApiService';
+import { GoldApiService, MetalPriceResult } from './goldApiService';
 import { TwelveDataUsageManager } from '../models/TwelveDataUsage';
 import { EmailService } from './emailService';
 import { IUser, User } from '../models/User';
+import { MetalAnalysisAiService, MetalAiAnalysis } from '../ai/metalAnalysisAi';
 
 export interface MarketPriceSummary {
   symbol: string;
@@ -38,15 +39,18 @@ export class MarketMonitoringService {
   static async getAssetPrice(
     assetType: AssetType,
     symbol: string,
-    currency = 'USD'
+    currency?: string
   ): Promise<MarketPriceSummary> {
     const cleanSymbol = symbol.trim().toUpperCase();
+    const isMetal = assetType === 'GOLD' || cleanSymbol === 'XAU' || assetType === 'SILVER' || cleanSymbol === 'XAG';
+    // Precious metals (Gold/Silver) must always be priced in Indian Rupees (INR)
+    const effectiveCurrency = isMetal ? 'INR' : (currency || 'USD');
 
     // 1. Check cache first
     const cached = await MarketPriceCache.findOne({ symbol: cleanSymbol });
     const now = Date.now();
 
-    if (cached && (now - cached.updatedAt.getTime()) < this.CACHE_TTL_MS) {
+    if (cached && cached.currency === effectiveCurrency && (now - cached.updatedAt.getTime()) < this.CACHE_TTL_MS) {
       return {
         symbol: cached.symbol,
         assetType: cached.assetType,
@@ -66,7 +70,7 @@ export class MarketMonitoringService {
     let freshData: MarketPriceSummary;
 
     if (assetType === 'GOLD' || cleanSymbol === 'XAU') {
-      const metal = await GoldApiService.getMetalPrice('XAU', currency);
+      const metal = await GoldApiService.getMetalPrice('XAU', effectiveCurrency);
       freshData = {
         symbol: 'XAU',
         assetType: 'GOLD',
@@ -76,12 +80,12 @@ export class MarketMonitoringService {
         percentChange: metal.percentChange,
         high: metal.high,
         low: metal.low,
-        currency,
+        currency: effectiveCurrency,
         source: metal.source,
         updatedAt: new Date()
       };
     } else if (assetType === 'SILVER' || cleanSymbol === 'XAG') {
-      const metal = await GoldApiService.getMetalPrice('XAG', currency);
+      const metal = await GoldApiService.getMetalPrice('XAG', effectiveCurrency);
       freshData = {
         symbol: 'XAG',
         assetType: 'SILVER',
@@ -91,7 +95,7 @@ export class MarketMonitoringService {
         percentChange: metal.percentChange,
         high: metal.high,
         low: metal.low,
-        currency,
+        currency: effectiveCurrency,
         source: metal.source,
         updatedAt: new Date()
       };
@@ -168,10 +172,10 @@ export class MarketMonitoringService {
   }> {
     const usage = await this.getUsageMetrics();
 
-    // 1. Fetch Gold & Silver
+    // 1. Fetch Gold & Silver in Indian Rupees (INR)
     const [goldPrice, silverPrice] = await Promise.all([
-      this.getAssetPrice('GOLD', 'XAU'),
-      this.getAssetPrice('SILVER', 'XAG')
+      this.getAssetPrice('GOLD', 'XAU', 'INR'),
+      this.getAssetPrice('SILVER', 'XAG', 'INR')
     ]);
 
     // 2. Fetch popular stocks via single efficient batch request
@@ -269,7 +273,39 @@ export class MarketMonitoringService {
   }
 
   /**
-   * Creates a user-defined price alert.
+   * Fetches real-time precious metal market data along with AI trend analysis.
+   */
+  static async getMetalAnalysis(
+    metal: 'GOLD' | 'SILVER',
+    currency = 'INR'
+  ): Promise<{
+    price: MetalPriceResult;
+    aiAnalysis: MetalAiAnalysis;
+  }> {
+    const symbol = metal === 'GOLD' ? 'XAU' : 'XAG';
+    const quote = await GoldApiService.getMetalPrice(symbol, currency);
+
+    const aiAnalysis = await MetalAnalysisAiService.analyzeMetal({
+      metal,
+      symbol,
+      price: quote.price,
+      priceGram24k: quote.priceGram24k,
+      priceGram22k: quote.priceGram22k,
+      change: quote.change,
+      percentChange: quote.percentChange,
+      high: quote.high,
+      low: quote.low,
+      currency
+    });
+
+    return {
+      price: quote,
+      aiAnalysis
+    };
+  }
+
+  /**
+   * Creates a user-defined price alert with user intention and AI market analysis.
    */
   static async createAlert(
     userId: string,
@@ -278,32 +314,94 @@ export class MarketMonitoringService {
       symbol: string;
       assetName?: string;
       targetPrice: number;
-      condition: AlertCondition;
+      condition?: AlertCondition;
+      intention?: AlertIntention;
       currency?: string;
       notes?: string;
     }
   ): Promise<IPriceAlert> {
     const userObjectId = new mongoose.Types.ObjectId(userId);
     const cleanSymbol = data.symbol.trim().toUpperCase();
+    const isMetal = data.assetType === 'GOLD' || cleanSymbol === 'XAU' || data.assetType === 'SILVER' || cleanSymbol === 'XAG';
+    const alertCurrency = isMetal ? 'INR' : (data.currency || 'USD');
 
-    // Fetch initial asset price
+    // Determine condition based on intention if provided
+    let resolvedIntention: AlertIntention = data.intention || 'PRICE_THRESHOLD';
+    let resolvedCondition: AlertCondition = data.condition || 'ABOVE';
+
+    if (resolvedIntention === 'BUY_ON_FALL') {
+      resolvedCondition = 'BELOW';
+    } else if (resolvedIntention === 'MONITOR_GROWTH') {
+      resolvedCondition = 'ABOVE';
+    } else if (data.condition) {
+      resolvedCondition = data.condition;
+      resolvedIntention = resolvedCondition === 'BELOW' ? 'BUY_ON_FALL' : 'MONITOR_GROWTH';
+    }
+
+    // Fetch initial asset price from real market feeds
     const currentPriceInfo = await this.getAssetPrice(
       data.assetType,
       cleanSymbol,
-      data.currency || 'USD'
+      alertCurrency
     );
 
-    const assetName = data.assetName || currentPriceInfo.name;
+    const rawAssetName = data.assetName || currentPriceInfo.name;
+    const assetName = isMetal
+      ? rawAssetName.replace(/\/USD\)/g, '/INR)').replace(/\(USD\)/g, '(INR)')
+      : rawAssetName;
+
+    // Generate AI educational trend analysis for Precious Metals
+    let aiAnalysis: IPriceAlertAiAnalysis | null = null;
+    if (isMetal) {
+      try {
+        const isGold = data.assetType === 'GOLD' || cleanSymbol === 'XAU';
+        const metalQuote = await GoldApiService.getMetalPrice(isGold ? 'XAU' : 'XAG', alertCurrency);
+        const ai = await MetalAnalysisAiService.analyzeMetal({
+          metal: isGold ? 'GOLD' : 'SILVER',
+          symbol: isGold ? 'XAU' : 'XAG',
+          price: currentPriceInfo.price,
+          priceGram24k: metalQuote.priceGram24k,
+          priceGram22k: metalQuote.priceGram22k,
+          change: currentPriceInfo.change,
+          percentChange: currentPriceInfo.percentChange,
+          high: currentPriceInfo.high,
+          low: currentPriceInfo.low,
+          currency: alertCurrency,
+          intention: resolvedIntention,
+          targetPrice: data.targetPrice
+        });
+
+        aiAnalysis = {
+          trend: ai.trend,
+          summary: ai.summary,
+          explanation: ai.explanation,
+          recommendation: ai.recommendation,
+          educationalTakeaway: ai.educationalTakeaway,
+          analyzedAt: ai.analyzedAt
+        };
+      } catch (aiErr) {
+        console.warn('[Market Monitoring] AI analysis notice during alert creation:', aiErr);
+      }
+    }
 
     // Check if the condition is already met upon creation
     let isAlreadyTriggered = false;
     let notificationMsg: string | null = null;
-    if (data.condition === 'ABOVE' && currentPriceInfo.price >= data.targetPrice) {
+    const currSym = alertCurrency === 'INR' ? '₹' : (alertCurrency === 'EUR' ? '€' : (alertCurrency === 'GBP' ? '£' : '$'));
+    if (resolvedCondition === 'ABOVE' && currentPriceInfo.price >= data.targetPrice) {
       isAlreadyTriggered = true;
-      notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) rose above $${data.targetPrice.toLocaleString()}! Current price is $${currentPriceInfo.price.toLocaleString()}.`;
-    } else if (data.condition === 'BELOW' && currentPriceInfo.price <= data.targetPrice) {
+      if (resolvedIntention === 'MONITOR_GROWTH') {
+        notificationMsg = `📈 Investment Target Hit: ${assetName} (${cleanSymbol}) reached ${currSym}${currentPriceInfo.price.toLocaleString('en-IN')} (Target: ${currSym}${data.targetPrice.toLocaleString('en-IN')}).`;
+      } else {
+        notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) rose above ${currSym}${data.targetPrice.toLocaleString('en-IN')}! Current price is ${currSym}${currentPriceInfo.price.toLocaleString('en-IN')}.`;
+      }
+    } else if (resolvedCondition === 'BELOW' && currentPriceInfo.price <= data.targetPrice) {
       isAlreadyTriggered = true;
-      notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) fell below $${data.targetPrice.toLocaleString()}! Current price is $${currentPriceInfo.price.toLocaleString()}.`;
+      if (resolvedIntention === 'BUY_ON_FALL') {
+        notificationMsg = `🟢 Buying Opportunity: ${assetName} (${cleanSymbol}) dipped to ${currSym}${currentPriceInfo.price.toLocaleString('en-IN')} (Buy Target: ${currSym}${data.targetPrice.toLocaleString('en-IN')}).`;
+      } else {
+        notificationMsg = `🔔 Alert Triggered: ${assetName} (${cleanSymbol}) fell below ${currSym}${data.targetPrice.toLocaleString('en-IN')}! Current price is ${currSym}${currentPriceInfo.price.toLocaleString('en-IN')}.`;
+      }
     }
 
     const alert = await PriceAlert.create({
@@ -312,8 +410,9 @@ export class MarketMonitoringService {
       symbol: cleanSymbol,
       assetName,
       targetPrice: data.targetPrice,
-      currency: data.currency || 'USD',
-      condition: data.condition,
+      currency: alertCurrency,
+      condition: resolvedCondition,
+      intention: resolvedIntention,
       initialPrice: currentPriceInfo.price,
       currentPrice: currentPriceInfo.price,
       status: isAlreadyTriggered ? 'TRIGGERED' : 'ACTIVE',
@@ -323,7 +422,8 @@ export class MarketMonitoringService {
       isRead: false,
       emailSent: false,
       emailSentAt: null,
-      notes: data.notes || null
+      notes: data.notes || null,
+      aiAnalysis
     });
 
     // If already met on creation, immediately trigger email notification
@@ -336,10 +436,12 @@ export class MarketMonitoringService {
             recipientName: user.fullName || 'SaveWise Member',
             assetName,
             symbol: cleanSymbol,
-            condition: data.condition,
+            condition: resolvedCondition,
+            intention: resolvedIntention,
             targetPrice: data.targetPrice,
             currentPrice: currentPriceInfo.price,
-            currency: data.currency || 'USD'
+            currency: data.currency || 'USD',
+            aiAnalysis
           });
           if (sent) {
             alert.emailSent = true;
@@ -441,9 +543,11 @@ export class MarketMonitoringService {
     // Collect unique assets to avoid duplicate credit consumption
     const uniqueAssets = new Map<string, { assetType: AssetType; symbol: string; currency: string }>();
     activeAlerts.forEach(a => {
-      const key = `${a.assetType}:${a.symbol}:${a.currency}`;
+      const isMetal = a.assetType === 'GOLD' || a.symbol === 'XAU' || a.assetType === 'SILVER' || a.symbol === 'XAG';
+      const effectiveCurr = isMetal ? 'INR' : (a.currency || 'USD');
+      const key = `${a.assetType}:${a.symbol}:${effectiveCurr}`;
       if (!uniqueAssets.has(key)) {
-        uniqueAssets.set(key, { assetType: a.assetType, symbol: a.symbol, currency: a.currency });
+        uniqueAssets.set(key, { assetType: a.assetType, symbol: a.symbol, currency: effectiveCurr });
       }
     });
 
@@ -462,7 +566,13 @@ export class MarketMonitoringService {
 
     // Evaluate each active alert against the retrieved price
     for (const alert of activeAlerts) {
-      const key = `${alert.assetType}:${alert.symbol}:${alert.currency}`;
+      const isMetal = alert.assetType === 'GOLD' || alert.symbol === 'XAU' || alert.assetType === 'SILVER' || alert.symbol === 'XAG';
+      const effectiveCurr = isMetal ? 'INR' : (alert.currency || 'USD');
+      if (isMetal && alert.currency !== 'INR') {
+        alert.currency = 'INR';
+        alert.assetName = alert.assetName.replace(/\/USD\)/g, '/INR)').replace(/\(USD\)/g, '(INR)');
+      }
+      const key = `${alert.assetType}:${alert.symbol}:${effectiveCurr}`;
       const currentPrice = priceMap.get(key);
       if (currentPrice === undefined) continue;
 
@@ -470,13 +580,22 @@ export class MarketMonitoringService {
 
       let isTriggered = false;
       let notificationMsg = '';
+      const currSym = alert.currency === 'INR' ? '₹' : (alert.currency === 'EUR' ? '€' : (alert.currency === 'GBP' ? '£' : '$'));
 
       if (alert.condition === 'ABOVE' && currentPrice >= alert.targetPrice) {
         isTriggered = true;
-        notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) rose above $${alert.targetPrice.toLocaleString()}! Current price is $${currentPrice.toLocaleString()}.`;
+        if (alert.intention === 'MONITOR_GROWTH') {
+          notificationMsg = `📈 Investment Target Hit: ${alert.assetName} (${alert.symbol}) reached ${currSym}${currentPrice.toLocaleString('en-IN')} (Target: ${currSym}${alert.targetPrice.toLocaleString('en-IN')}).`;
+        } else {
+          notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) rose above ${currSym}${alert.targetPrice.toLocaleString('en-IN')}! Current price is ${currSym}${currentPrice.toLocaleString('en-IN')}.`;
+        }
       } else if (alert.condition === 'BELOW' && currentPrice <= alert.targetPrice) {
         isTriggered = true;
-        notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) fell below $${alert.targetPrice.toLocaleString()}! Current price is $${currentPrice.toLocaleString()}.`;
+        if (alert.intention === 'BUY_ON_FALL') {
+          notificationMsg = `🟢 Buying Opportunity: ${alert.assetName} (${alert.symbol}) dipped to ${currSym}${currentPrice.toLocaleString('en-IN')} (Buy Target: ${currSym}${alert.targetPrice.toLocaleString('en-IN')}).`;
+        } else {
+          notificationMsg = `🔔 Alert Triggered: ${alert.assetName} (${alert.symbol}) fell below ${currSym}${alert.targetPrice.toLocaleString('en-IN')}! Current price is ${currSym}${currentPrice.toLocaleString('en-IN')}.`;
+        }
       }
 
       if (isTriggered) {
@@ -487,7 +606,7 @@ export class MarketMonitoringService {
         alert.isRead = false;
         newlyTriggered.push(alert as any);
 
-        // Send email notification to authenticated user via Nodemailer + SMTP
+        // Send email notification to authenticated user via Nodemailer + SMTP (guaranteed deduplication)
         if (!alert.emailSent) {
           const user = alert.userId as unknown as IUser;
           if (user && user.email) {
@@ -498,9 +617,11 @@ export class MarketMonitoringService {
                 assetName: alert.assetName,
                 symbol: alert.symbol,
                 condition: alert.condition,
+                intention: alert.intention,
                 targetPrice: alert.targetPrice,
                 currentPrice: currentPrice,
-                currency: alert.currency || 'USD'
+                currency: alert.currency || 'USD',
+                aiAnalysis: alert.aiAnalysis
               });
               if (sent) {
                 alert.emailSent = true;
